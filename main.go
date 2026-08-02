@@ -146,7 +146,10 @@ EXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE
 }
 
 func main() {
-	a := app.New()
+	a := app.NewWithID("com.example.certpeek")
+	prefs := a.Preferences()
+	autoOpenKey := "auto_open"
+
 	w := a.NewWindow("CertPeek")
 	w.Resize(fyne.NewSize(1100, 800))
 
@@ -177,6 +180,11 @@ func main() {
 	preview := widget.NewMultiLineEntry()
 	preview.Disable()
 
+	autoOpen := widget.NewCheck("Auto öffnen bei erkanntem Zertifikat", func(v bool) {
+		prefs.SetBool(autoOpenKey, v)
+	})
+	autoOpen.SetChecked(prefs.BoolWithFallback(autoOpenKey, false))
+
 	btnRefresh := widget.NewButton("Neu prüfen", func() {
 		text, err := clipboard.ReadAll()
 		if err != nil {
@@ -191,24 +199,32 @@ func main() {
 		}
 		c := parseCert(text)
 		setUI(status, parseState, subject, issuer, serial, validity, fingerprint, pubkey, isCA, dns, emails, ips, raw, preview, c)
-		w.Show()
 	})
 
 	btnDummy := widget.NewButton("Dummy laden", func() {
 		c := parseCert(buildDummyCert())
 		setUI(status, parseState, subject, issuer, serial, validity, fingerprint, pubkey, isCA, dns, emails, ips, raw, preview, c)
-		w.Show()
 	})
 
 	btnQuit := widget.NewButton("Beenden", func() {
 		a.Quit()
 	})
 
+	btnShow := widget.NewButton("Öffnen", func() {
+		w.Show()
+		w.RequestFocus()
+	})
+
+	settingsTab := container.NewVBox(
+		autoOpen,
+		widget.NewLabel("Die Einstellung wird automatisch gespeichert."),
+	)
+
 	top := container.NewVBox(
 		desktopLabel,
 		status,
 		parseState,
-		container.NewHBox(btnRefresh, btnDummy, btnQuit),
+		container.NewHBox(btnRefresh, btnDummy, btnShow, btnQuit),
 	)
 
 	overview := container.NewVScroll(container.NewVBox(
@@ -242,10 +258,10 @@ func main() {
 		container.NewTabItem("Übersicht", overview),
 		container.NewTabItem("SANs", sans),
 		container.NewTabItem("Raw", rawTab),
+		container.NewTabItem("Einstellungen", settingsTab),
 	)
 
 	w.SetContent(container.NewBorder(top, nil, nil, nil, tabs))
-
 	w.SetCloseIntercept(func() {
 		w.Hide()
 	})
@@ -278,12 +294,14 @@ func main() {
 					c := parseCert(text)
 					fyne.Do(func() {
 						setUI(status, parseState, subject, issuer, serial, validity, fingerprint, pubkey, isCA, dns, emails, ips, raw, preview, c)
-						w.Show()
-						w.RequestFocus()
 						a.SendNotification(&fyne.Notification{
 							Title:   "Zertifikat gefunden",
 							Content: "Ein passendes Zertifikat wurde in der Zwischenablage erkannt.",
 						})
+						if prefs.BoolWithFallback(autoOpenKey, false) {
+							w.Show()
+							w.RequestFocus()
+						}
 					})
 				}
 			}
