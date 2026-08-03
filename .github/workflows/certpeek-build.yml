@@ -24,7 +24,12 @@ jobs:
       - name: Install Linux deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev libwayland-dev libxkbcommon-dev pkg-config
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            xorg-dev \
+            pkg-config
 
       - name: Download dependencies
         run: go mod download
