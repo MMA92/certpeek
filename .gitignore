@@ -1,0 +1,37 @@
+# Binaries
+certpeek
+bin/
+dist/
+
+# Go
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Module/cache
+go.sum
+vendor/
+
+# IDEs / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build artifacts
+coverage.out
+coverage*.txt
+
+# Fyne / app-specific
+certpeek-icon.png

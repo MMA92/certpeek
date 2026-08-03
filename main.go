@@ -35,6 +35,14 @@ type CertData struct {
 	Raw         string
 }
 
+func loadIcon() fyne.Resource {
+	icon, err := fyne.LoadResourceFromPath("icon.png")
+	if err != nil {
+		panic(err)
+	}
+	return icon
+}
+
 func detectDesktop() string {
 	candidates := []string{
 		os.Getenv("XDG_CURRENT_DESKTOP"),
@@ -147,10 +155,14 @@ EXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE
 
 func main() {
 	a := app.NewWithID("com.example.certpeek")
+	icon := loadIcon()
+	a.SetIcon(icon)
+
 	prefs := a.Preferences()
 	autoOpenKey := "auto_open"
 
 	w := a.NewWindow("CertPeek")
+	w.SetIcon(icon)
 	w.Resize(fyne.NewSize(1100, 800))
 
 	status := widget.NewLabel("Warte auf PEM-Zertifikat in der Zwischenablage ...")
@@ -167,16 +179,12 @@ func main() {
 
 	dns := widget.NewMultiLineEntry()
 	dns.Disable()
-
 	emails := widget.NewMultiLineEntry()
 	emails.Disable()
-
 	ips := widget.NewMultiLineEntry()
 	ips.Disable()
-
 	raw := widget.NewMultiLineEntry()
 	raw.Disable()
-
 	preview := widget.NewMultiLineEntry()
 	preview.Disable()
 
@@ -277,7 +285,7 @@ func main() {
 			a.Quit()
 		})
 
-		desk.SetSystemTrayIcon(theme.FyneLogo())
+		desk.SetSystemTrayIcon(icon)
 		desk.SetSystemTrayMenu(fyne.NewMenu("CertPeek", openItem, quitItem))
 		desk.SetSystemTrayWindow(w)
 	}
