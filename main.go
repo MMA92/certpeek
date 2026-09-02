@@ -3,14 +3,17 @@ package main
 import (
 	"crypto/sha256"
 	"crypto/x509"
+	_ "embed"
 	"encoding/pem"
 	"fmt"
+	"image/color"
 	"os"
 	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
@@ -19,28 +22,32 @@ import (
 	"github.com/atotto/clipboard"
 )
 
+//go:embed icon.png
+var iconBytes []byte
+
+// expiryWarnDays defines how many days before expiry a certificate is
+// considered "expiring soon" and highlighted in orange.
+const expiryWarnDays = 30
+
 type CertData struct {
-	ParseError  string
-	Subject     string
-	Issuer      string
-	Serial      string
-	NotBefore   string
-	NotAfter    string
-	Fingerprint string
-	PubKeyAlgo  string
-	IsCA        string
-	DNSNames    []string
-	Emails      []string
-	IPs         []string
-	Raw         string
+	ParseError   string
+	Subject      string
+	Issuer       string
+	Serial       string
+	NotBefore    string
+	NotAfter     string
+	NotAfterTime time.Time
+	Fingerprint  string
+	PubKeyAlgo   string
+	IsCA         string
+	DNSNames     []string
+	Emails       []string
+	IPs          []string
+	Raw          string
 }
 
 func loadIcon() fyne.Resource {
-	icon, err := fyne.LoadResourceFromPath("icon.png")
-	if err != nil {
-		panic(err)
-	}
-	return icon
+	return fyne.NewStaticResource("icon.png", iconBytes)
 }
 
 func detectDesktop() string {
@@ -98,6 +105,7 @@ func parseCert(pemText string) CertData {
 	out.Serial = cert.SerialNumber.String()
 	out.NotBefore = cert.NotBefore.Format(time.RFC3339)
 	out.NotAfter = cert.NotAfter.Format(time.RFC3339)
+	out.NotAfterTime = cert.NotAfter
 	out.Fingerprint = fmt.Sprintf("%X", sum[:])
 	out.PubKeyAlgo = cert.PublicKeyAlgorithm.String()
 	out.IsCA = fmt.Sprintf("%v", cert.IsCA)
@@ -109,8 +117,45 @@ func parseCert(pemText string) CertData {
 	return out
 }
 
+// expiryColor determines the highlight color for a certificate's validity
+// based on its NotAfter timestamp: red if expired, orange if expiring soon
+// (within expiryWarnDays), and the default theme color otherwise.
+func expiryColor(notAfter time.Time) color.Color {
+	if notAfter.IsZero() {
+		return theme.Color(theme.ColorNameForeground)
+	}
+	remaining := time.Until(notAfter)
+	switch {
+	case remaining < 0:
+		return theme.Color(theme.ColorNameError)
+	case remaining < expiryWarnDays*24*time.Hour:
+		return theme.Color(theme.ColorNameWarning)
+	default:
+		return theme.Color(theme.ColorNameForeground)
+	}
+}
+
+// expirySuffix returns a short human-readable hint appended to the validity
+// text, e.g. "(abgelaufen)" or "(läuft in 5 Tagen ab)".
+func expirySuffix(notAfter time.Time) string {
+	if notAfter.IsZero() {
+		return ""
+	}
+	remaining := time.Until(notAfter)
+	days := int(remaining.Hours() / 24)
+	switch {
+	case remaining < 0:
+		return fmt.Sprintf("  [ABGELAUFEN seit %d Tagen]", -days)
+	case remaining < expiryWarnDays*24*time.Hour:
+		return fmt.Sprintf("  [läuft in %d Tagen ab]", days)
+	default:
+		return ""
+	}
+}
+
 func setUI(
-	status, parseState, subject, issuer, serial, validity, fingerprint, pubkey, isCA *widget.Label,
+	status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA *widget.Label,
+	validity *canvas.Text,
 	dns, emails, ips, raw, preview *widget.Entry,
 	c CertData,
 ) {
@@ -125,7 +170,9 @@ func setUI(
 	subject.SetText("Subject: " + c.Subject)
 	issuer.SetText("Issuer: " + c.Issuer)
 	serial.SetText("Serial: " + c.Serial)
-	validity.SetText("Validity: " + c.NotBefore + "  ->  " + c.NotAfter)
+	validity.Text = "Validity: " + c.NotBefore + "  ->  " + c.NotAfter + expirySuffix(c.NotAfterTime)
+	validity.Color = expiryColor(c.NotAfterTime)
+	validity.Refresh()
 	fingerprint.SetText("SHA-256: " + c.Fingerprint)
 	pubkey.SetText("Public Key: " + c.PubKeyAlgo)
 	isCA.SetText("Is CA: " + c.IsCA)
@@ -172,7 +219,7 @@ func main() {
 	subject := widget.NewLabel("Subject: -")
 	issuer := widget.NewLabel("Issuer: -")
 	serial := widget.NewLabel("Serial: -")
-	validity := widget.NewLabel("Validity: -")
+	validity := canvas.NewText("Validity: -", theme.Color(theme.ColorNameForeground))
 	fingerprint := widget.NewLabel("SHA-256: -")
 	pubkey := widget.NewLabel("Public Key: -")
 	isCA := widget.NewLabel("Is CA: -")
@@ -206,12 +253,12 @@ func main() {
 			return
 		}
 		c := parseCert(text)
-		setUI(status, parseState, subject, issuer, serial, validity, fingerprint, pubkey, isCA, dns, emails, ips, raw, preview, c)
+		setUI(status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA, validity, dns, emails, ips, raw, preview, c)
 	})
 
 	btnDummy := widget.NewButton("Dummy laden", func() {
 		c := parseCert(buildDummyCert())
-		setUI(status, parseState, subject, issuer, serial, validity, fingerprint, pubkey, isCA, dns, emails, ips, raw, preview, c)
+		setUI(status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA, validity, dns, emails, ips, raw, preview, c)
 	})
 
 	btnQuit := widget.NewButton("Beenden", func() {
@@ -301,7 +348,7 @@ func main() {
 				if strings.Contains(text, "-----BEGIN CERTIFICATE-----") {
 					c := parseCert(text)
 					fyne.Do(func() {
-						setUI(status, parseState, subject, issuer, serial, validity, fingerprint, pubkey, isCA, dns, emails, ips, raw, preview, c)
+						setUI(status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA, validity, dns, emails, ips, raw, preview, c)
 						a.SendNotification(&fyne.Notification{
 							Title:   "Zertifikat gefunden",
 							Content: "Ein passendes Zertifikat wurde in der Zwischenablage erkannt.",
