@@ -1,5 +1,7 @@
 # CertPeek
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 CertPeek is a small Go desktop app that watches your clipboard for PEM-encoded X.509 certificates and displays certificate details in a GUI.
 
 ## Features
@@ -27,4 +29,4 @@ Copy a PEM certificate to the clipboard and CertPeek will detect it automaticall
 
 ## License
 
-MIT
+Licensed under the [MIT License](LICENSE).
