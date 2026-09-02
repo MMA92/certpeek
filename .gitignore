@@ -1,7 +1,9 @@
 # Binaries
 certpeek
+main
 bin/
 dist/
+*.tar.gz
 
 # Go
 *.exe
