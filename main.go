@@ -27,6 +27,12 @@ import (
 //go:embed icon.png
 var iconBytes []byte
 
+//go:embed testdata/dummy_cert.pem
+var dummyCertPEM string
+
+//go:embed testdata/dummy_bundle.pem
+var dummyBundlePEM string
+
 // expiryWarnDays defines how many days before expiry a certificate is
 // considered "expiring soon" and highlighted in orange.
 const expiryWarnDays = 30
@@ -95,20 +101,45 @@ func normalizePEM(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-func parseCert(pemText string) CertData {
-	out := CertData{Raw: pemText}
-
-	block, _ := pem.Decode([]byte(normalizePEM(pemText)))
-	if block == nil {
-		out.ParseError = "kein PEM-Block gefunden"
-		out.Raw = firstNLines(pemText, 12)
-		return out
+// parseCertChain parses every CERTIFICATE PEM block in pemText (a bundle of
+// leaf + intermediate + root certs, in any order) and returns one CertData
+// per block. Non-certificate PEM blocks (e.g. private keys) are skipped.
+// If pemText contains no certificate block at all, a single CertData with
+// ParseError set is returned so callers can still show a "not found" state.
+func parseCertChain(pemText string) []CertData {
+	rest := []byte(normalizePEM(pemText))
+	var out []CertData
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		out = append(out, certDataFromDER(block.Bytes, pemText))
 	}
+	if len(out) == 0 {
+		c := CertData{ParseError: "kein PEM-Zertifikat gefunden", Raw: firstNLines(pemText, 12)}
+		out = append(out, c)
+	}
+	return out
+}
 
-	cert, err := x509.ParseCertificate(block.Bytes)
+// parseCert parses the first certificate found in pemText. Use
+// parseCertChain to inspect a bundle containing multiple certificates.
+func parseCert(pemText string) CertData {
+	return parseCertChain(pemText)[0]
+}
+
+func certDataFromDER(der []byte, rawSource string) CertData {
+	out := CertData{Raw: firstNLines(rawSource, 20)}
+
+	cert, err := x509.ParseCertificate(der)
 	if err != nil {
 		out.ParseError = err.Error()
-		out.Raw = firstNLines(pemText, 12)
+		out.Raw = firstNLines(rawSource, 12)
 		return out
 	}
 
@@ -130,7 +161,6 @@ func parseCert(pemText string) CertData {
 	out.DNSNames = append([]string(nil), cert.DNSNames...)
 	out.Emails = append([]string(nil), cert.EmailAddresses...)
 	out.IPs = ips
-	out.Raw = firstNLines(pemText, 20)
 
 	return out
 }
@@ -203,50 +233,56 @@ func setUI(
 	preview.SetText(c.Raw)
 }
 
-func buildDummyCert() string {
-	return strings.TrimSpace(`
------BEGIN CERTIFICATE-----
-MIID0TCCArmgAwIBAgIUGeYbTE7imbaPmlrvgF2X9PeVTkgwDQYJKoZIhvcNAQEL
-BQAwaDELMAkGA1UEBhMCREUxDzANBgNVBAgMBkhlc3NlbjESMBAGA1UEBwwJRnJh
-bmtmdXJ0MRUwEwYDVQQKDAxUZXN0IE9yZyBMdGQxHTAbBgNVBAMMFGR1bW15LmNl
-cnRwZWVrLmxvY2FsMB4XDTI2MTEyNjA4MjU0MloXDTI3MTEyNjA4MjU0MlowaDEL
-MAkGA1UEBhMCREUxDzANBgNVBAgMBkhlc3NlbjESMBAGA1UEBwwJRnJhbmtmdXJ0
-MRUwEwYDVQQKDAxUZXN0IE9yZyBMdGQxHTAbBgNVBAMMFGR1bW15LmNlcnRwZWVr
-LmxvY2FsMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsXVTx3bnjzaB
-8e3Vlj+6SEZBN2YDnfAO4aAZHFfiiL8S433eeFvOsCAGEpNVE8Nyo8Ii5VtWwYYt
-MA67FC5y1ywMjqGvRwJ1/N/8IzivSlsvuzgxyrbkuXDbPfse2tGNvT5v3MW2zSbt
-xt/AB8PN+g5r0Sh4b8rUsglyE5GBDZmdWkEclA3cuwfYkMqc3Nnd4cTfpkIu8I5y
-MI4dvfbnkSNs5M3Hrjv5Wt65Kt3dcGsdVIPToBzJJVMGEg2K1VgAkhmRzwkn6nN7
-Mzsed8B6FxY4VlH6KYYk7Km7CqHg3XJNHOdGRuLiDUQxKg6/P9cJeNknfEnVrcoi
-zuJ+mgBRJQIDAQABo3MwcTAdBgNVHQ4EFgQU/JQif5j7LvFnRvr51OwRg8LGk5gw
-DwYDVR0TAQH/BAUwAwEB/zA/BgNVHREEODA2ghRkdW1teS5jZXJ0cGVlay5sb2Nh
-bIIYd3d3LmR1bW15LmNlcnRwZWVrLmxvY2FshwR/AAABMA0GCSqGSIb3DQEBCwUA
-A4IBAQAwt3xiJS6hn1znV56/cwfBbJUAQDBbEMJSlj7yh1awprf7aHsgy7/k9IPv
-yzuLk8sQIksi6JmQe/aexUr9iBVWJb+r2JMa76/D1v/m6nmWST1DlvR1IdsENEre
-T9mWkOxYHqI/kUjgqwaK4h4NFmYWBi/gU5pBwlv7sFbb7qOb39yv7Z6v8M9dawdH
-20SR0QBqsLGxWOadfNZkFQTgia1CvjwXToENBSWmIP6ptZMPxKIpXO4qOFhP1Fp4
-Xfx3jb4co1AOKUVxtN0gbBz7IihKnmAYxBGuBEoi8ufLkUEqAYyQWBSmWXQPD+S7
-1r7pvw6OEKTpzErt6TJNYsOOp/JY
------END CERTIFICATE-----
-`)
+// chainSummaryCard renders a compact summary of one certificate in a chain,
+// labelled with its position (e.g. "1/4 (Leaf)").
+func chainSummaryCard(pos, total int, c CertData) fyne.CanvasObject {
+	role := "Intermediate"
+	if pos == 1 {
+		role = "Leaf"
+	} else if pos == total {
+		role = "Root"
+	}
+	if c.ParseError != "" {
+		return container.NewVBox(
+			widget.NewLabelWithStyle(fmt.Sprintf("%d/%d (%s) - Fehler", pos, total, role), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			widget.NewLabel(c.ParseError),
+			widget.NewSeparator(),
+		)
+	}
+	validity := canvas.NewText("Validity: "+c.NotBefore+"  ->  "+c.NotAfter+expirySuffix(c.NotAfterTime), expiryColor(c.NotAfterTime))
+	return container.NewVBox(
+		widget.NewLabelWithStyle(fmt.Sprintf("%d/%d (%s)", pos, total, role), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabel("Subject: "+c.Subject),
+		widget.NewLabel("Issuer: "+c.Issuer),
+		validity,
+		widget.NewLabel("SHA-256: "+c.Fingerprint),
+		widget.NewSeparator(),
+	)
 }
 
-func runService(logger *syslog.Writer) {
-	logger.Info("CertPeek service started")
+func watchClipboard(onChain func([]CertData)) {
 	last := ""
 	for {
 		text, err := clipboard.ReadAll()
 		if err == nil && text != last && strings.Contains(text, "-----BEGIN CERTIFICATE-----") {
 			last = text
-			c := parseCert(text)
+			onChain(parseCertChain(text))
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func runService(logger *syslog.Writer) {
+	logger.Info("CertPeek service started")
+	watchClipboard(func(chain []CertData) {
+		for i, c := range chain {
 			if c.ParseError == "" {
-				logger.Info(fmt.Sprintf("Cert found: Subject=%s, NotAfter=%s", c.Subject, c.NotAfter))
+				logger.Info(fmt.Sprintf("Cert %d/%d found: Subject=%s, NotAfter=%s", i+1, len(chain), c.Subject, c.NotAfter))
 			} else {
 				logger.Info(fmt.Sprintf("Cert parse error: %s", c.ParseError))
 			}
 		}
-		time.Sleep(1 * time.Second)
-	}
+	})
 }
 
 func main() {
@@ -303,6 +339,21 @@ func main() {
 	})
 	autoOpen.SetChecked(prefs.BoolWithFallback(autoOpenKey, false))
 
+	chainBox := container.NewVBox()
+
+	updateFromChain := func(chain []CertData) {
+		setUI(status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA, validity, dns, emails, ips, raw, preview, chain[0])
+		chainBox.RemoveAll()
+		if len(chain) > 1 {
+			for i, c := range chain {
+				chainBox.Add(chainSummaryCard(i+1, len(chain), c))
+			}
+		} else {
+			chainBox.Add(widget.NewLabel("Nur ein Zertifikat gefunden (kein Bundle)."))
+		}
+		chainBox.Refresh()
+	}
+
 	btnRefresh := widget.NewButton("Neu prüfen", func() {
 		text, err := clipboard.ReadAll()
 		if err != nil {
@@ -315,13 +366,15 @@ func main() {
 			raw.SetText(firstNLines(text, 20))
 			return
 		}
-		c := parseCert(text)
-		setUI(status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA, validity, dns, emails, ips, raw, preview, c)
+		updateFromChain(parseCertChain(text))
 	})
 
 	btnDummy := widget.NewButton("Dummy laden", func() {
-		c := parseCert(buildDummyCert())
-		setUI(status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA, validity, dns, emails, ips, raw, preview, c)
+		updateFromChain(parseCertChain(dummyCertPEM))
+	})
+
+	btnDummyBundle := widget.NewButton("Dummy-Kette laden", func() {
+		updateFromChain(parseCertChain(dummyBundlePEM))
 	})
 
 	btnQuit := widget.NewButton("Beenden", func() {
@@ -342,7 +395,7 @@ func main() {
 		desktopLabel,
 		status,
 		parseState,
-		container.NewHBox(btnRefresh, btnDummy, btnShow, btnQuit),
+		container.NewHBox(btnRefresh, btnDummy, btnDummyBundle, btnShow, btnQuit),
 	)
 
 	overview := container.NewVScroll(container.NewVBox(
@@ -372,9 +425,12 @@ func main() {
 		raw,
 	))
 
+	chainTab := container.NewVScroll(chainBox)
+
 	tabs := container.NewAppTabs(
 		container.NewTabItem("Übersicht", overview),
 		container.NewTabItem("SANs", sans),
+		container.NewTabItem("Kette", chainTab),
 		container.NewTabItem("Raw", rawTab),
 		container.NewTabItem("Einstellungen", settingsTab),
 	)
@@ -402,32 +458,25 @@ func main() {
 
 	w.Hide()
 
-	go func() {
-		last := ""
-		for {
-			text, err := clipboard.ReadAll()
-			if err == nil && text != last {
-				last = text
-				if strings.Contains(text, "-----BEGIN CERTIFICATE-----") {
-				c := parseCert(text)
-				fyne.Do(func() {
-					setUI(status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA, validity, dns, emails, ips, raw, preview, c)
-					if c.ParseError == "" {
-						a.SendNotification(&fyne.Notification{
-							Title:   "Zertifikat gefunden",
-							Content: "Ein passendes Zertifikat wurde in der Zwischenablage erkannt.",
-						})
-						if prefs.BoolWithFallback(autoOpenKey, false) {
-							w.Show()
-							w.RequestFocus()
-						}
-					}
+	go watchClipboard(func(chain []CertData) {
+		fyne.Do(func() {
+			updateFromChain(chain)
+			if chain[0].ParseError == "" {
+				content := "Ein passendes Zertifikat wurde in der Zwischenablage erkannt."
+				if len(chain) > 1 {
+					content = fmt.Sprintf("Eine Kette mit %d Zertifikaten wurde in der Zwischenablage erkannt.", len(chain))
+				}
+				a.SendNotification(&fyne.Notification{
+					Title:   "Zertifikat gefunden",
+					Content: content,
 				})
+				if prefs.BoolWithFallback(autoOpenKey, false) {
+					w.Show()
+					w.RequestFocus()
 				}
 			}
-			time.Sleep(1 * time.Second)
-		}
-	}()
+		})
+	})
 
 	w.ShowAndRun()
 }
