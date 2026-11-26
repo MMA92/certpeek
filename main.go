@@ -52,6 +52,10 @@ type CertData struct {
 	Emails       []string
 	IPs          []string
 	Raw          string
+
+	// cert holds the parsed certificate for chain-link verification
+	// (CheckSignatureFrom). Not used for display.
+	cert *x509.Certificate
 }
 
 func loadIcon() fyne.Resource {
@@ -161,8 +165,32 @@ func certDataFromDER(der []byte, rawSource string) CertData {
 	out.DNSNames = append([]string(nil), cert.DNSNames...)
 	out.Emails = append([]string(nil), cert.EmailAddresses...)
 	out.IPs = ips
+	out.cert = cert
 
 	return out
+}
+
+// chainLinkStatus describes how certificate chain[i] relates to chain[i+1]
+// (its presumed issuer in the bundle), or whether it is a self-signed root.
+func chainLinkStatus(chain []CertData, i int) string {
+	c := chain[i]
+	if c.cert == nil {
+		return ""
+	}
+	if i == len(chain)-1 {
+		if c.cert.CheckSignatureFrom(c.cert) == nil {
+			return "✓ selbstsigniert (Root)"
+		}
+		return "⚠ nicht selbstsigniert - Root fehlt in der Kette"
+	}
+	next := chain[i+1]
+	if next.cert == nil {
+		return "⚠ nächstes Zertifikat fehlerhaft"
+	}
+	if c.cert.CheckSignatureFrom(next.cert) == nil {
+		return "✓ signiert von #" + fmt.Sprint(i+2) + " (" + next.Subject + ")"
+	}
+	return "✗ NICHT signiert von #" + fmt.Sprint(i+2) + " - Kette gebrochen"
 }
 
 // expiryColor determines the highlight color for a certificate's validity
@@ -234,8 +262,9 @@ func setUI(
 }
 
 // chainSummaryCard renders a compact summary of one certificate in a chain,
-// labelled with its position (e.g. "1/4 (Leaf)").
-func chainSummaryCard(pos, total int, c CertData) fyne.CanvasObject {
+// labelled with its position (e.g. "1/4 (Leaf)") and how it links to the
+// next certificate (signature verified, broken, or self-signed root).
+func chainSummaryCard(pos, total int, c CertData, linkStatus string) fyne.CanvasObject {
 	role := "Intermediate"
 	if pos == 1 {
 		role = "Leaf"
@@ -244,20 +273,33 @@ func chainSummaryCard(pos, total int, c CertData) fyne.CanvasObject {
 	}
 	if c.ParseError != "" {
 		return container.NewVBox(
-			widget.NewLabelWithStyle(fmt.Sprintf("%d/%d (%s) - Fehler", pos, total, role), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			widget.NewLabelWithStyle(fmt.Sprintf("#%d/%d (%s) - Fehler", pos, total, role), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 			widget.NewLabel(c.ParseError),
 			widget.NewSeparator(),
 		)
 	}
 	validity := canvas.NewText("Validity: "+c.NotBefore+"  ->  "+c.NotAfter+expirySuffix(c.NotAfterTime), expiryColor(c.NotAfterTime))
-	return container.NewVBox(
-		widget.NewLabelWithStyle(fmt.Sprintf("%d/%d (%s)", pos, total, role), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+	box := container.NewVBox(
+		widget.NewLabelWithStyle(fmt.Sprintf("#%d/%d (%s)", pos, total, role), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel("Subject: "+c.Subject),
 		widget.NewLabel("Issuer: "+c.Issuer),
 		validity,
 		widget.NewLabel("SHA-256: "+c.Fingerprint),
-		widget.NewSeparator(),
 	)
+	if linkStatus != "" {
+		linkColor := theme.Color(theme.ColorNameForeground)
+		if strings.HasPrefix(linkStatus, "✗") || strings.HasPrefix(linkStatus, "⚠") {
+			linkColor = theme.Color(theme.ColorNameError)
+		} else if strings.HasPrefix(linkStatus, "✓") {
+			linkColor = theme.Color(theme.ColorNameSuccess)
+		}
+		box.Add(canvas.NewText(linkStatus, linkColor))
+	}
+	if pos < total {
+		box.Add(widget.NewLabel("  ↓"))
+	}
+	box.Add(widget.NewSeparator())
+	return box
 }
 
 func watchClipboard(onChain func([]CertData)) {
@@ -346,7 +388,7 @@ func main() {
 		chainBox.RemoveAll()
 		if len(chain) > 1 {
 			for i, c := range chain {
-				chainBox.Add(chainSummaryCard(i+1, len(chain), c))
+				chainBox.Add(chainSummaryCard(i+1, len(chain), c, chainLinkStatus(chain, i)))
 			}
 		} else {
 			chainBox.Add(widget.NewLabel("Nur ein Zertifikat gefunden (kein Bundle)."))
@@ -367,10 +409,6 @@ func main() {
 			return
 		}
 		updateFromChain(parseCertChain(text))
-	})
-
-	btnDummy := widget.NewButton("Dummy laden", func() {
-		updateFromChain(parseCertChain(dummyCertPEM))
 	})
 
 	btnDummyBundle := widget.NewButton("Dummy-Kette laden", func() {
@@ -395,7 +433,7 @@ func main() {
 		desktopLabel,
 		status,
 		parseState,
-		container.NewHBox(btnRefresh, btnDummy, btnDummyBundle, btnShow, btnQuit),
+		container.NewHBox(btnRefresh, btnDummyBundle, btnShow, btnQuit),
 	)
 
 	overview := container.NewVScroll(container.NewVBox(
