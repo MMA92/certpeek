@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/x509"
 	_ "embed"
@@ -38,24 +41,52 @@ var dummyBundlePEM string
 const expiryWarnDays = 30
 
 type CertData struct {
-	ParseError   string
-	Subject      string
-	Issuer       string
-	Serial       string
-	NotBefore    string
-	NotAfter     string
-	NotAfterTime time.Time
-	Fingerprint  string
-	PubKeyAlgo   string
-	IsCA         string
-	DNSNames     []string
-	Emails       []string
-	IPs          []string
-	Raw          string
+	ParseError      string
+	Subject         string
+	Issuer          string
+	Serial          string
+	Version         string
+	NotBefore       string
+	NotAfter        string
+	NotAfterTime    time.Time
+	SigAlgo         string
+	Fingerprint     string // SHA-256
+	FingerprintSHA1 string
+	PubKeyAlgo      string // e.g. "RSA 2048 bit" or "ECDSA P-256"
+	IsCA            string
+	DNSNames        []string
+	Emails          []string
+	IPs             []string
+	Raw             string
 
 	// cert holds the parsed certificate for chain-link verification
 	// (CheckSignatureFrom). Not used for display.
 	cert *x509.Certificate
+}
+
+// commonName extracts the CN= value from a Subject/Issuer string, falling
+// back to the full string if no CN is present (e.g. empty subject).
+func commonName(dn string) string {
+	for _, part := range strings.Split(dn, ",") {
+		part = strings.TrimSpace(part)
+		if v, ok := strings.CutPrefix(part, "CN="); ok {
+			return v
+		}
+	}
+	return dn
+}
+
+// pubKeyDescription returns a human-readable public key summary like
+// "RSA 2048 bit" or "ECDSA P-256", matching common certificate viewers.
+func pubKeyDescription(cert *x509.Certificate) string {
+	switch pub := cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		return fmt.Sprintf("RSA %d bit", pub.N.BitLen())
+	case *ecdsa.PublicKey:
+		return "ECDSA " + pub.Curve.Params().Name
+	default:
+		return cert.PublicKeyAlgorithm.String()
+	}
 }
 
 func loadIcon() fyne.Resource {
@@ -147,7 +178,8 @@ func certDataFromDER(der []byte, rawSource string) CertData {
 		return out
 	}
 
-	sum := sha256.Sum256(cert.Raw)
+	sum256 := sha256.Sum256(cert.Raw)
+	sum1 := sha1.Sum(cert.Raw)
 	ips := make([]string, 0, len(cert.IPAddresses))
 	for _, ip := range cert.IPAddresses {
 		ips = append(ips, ip.String())
@@ -155,12 +187,15 @@ func certDataFromDER(der []byte, rawSource string) CertData {
 
 	out.Subject = cert.Subject.String()
 	out.Issuer = cert.Issuer.String()
-	out.Serial = cert.SerialNumber.String()
-	out.NotBefore = cert.NotBefore.Format(time.RFC3339)
-	out.NotAfter = cert.NotAfter.Format(time.RFC3339)
+	out.Serial = fmt.Sprintf("%X", cert.SerialNumber)
+	out.Version = fmt.Sprintf("V%d", cert.Version)
+	out.NotBefore = cert.NotBefore.Format(time.RFC1123Z)
+	out.NotAfter = cert.NotAfter.Format(time.RFC1123Z)
 	out.NotAfterTime = cert.NotAfter
-	out.Fingerprint = fmt.Sprintf("%X", sum[:])
-	out.PubKeyAlgo = cert.PublicKeyAlgorithm.String()
+	out.SigAlgo = cert.SignatureAlgorithm.String()
+	out.Fingerprint = fmt.Sprintf("%X", sum256[:])
+	out.FingerprintSHA1 = fmt.Sprintf("%X", sum1[:])
+	out.PubKeyAlgo = pubKeyDescription(cert)
 	out.IsCA = fmt.Sprintf("%v", cert.IsCA)
 	out.DNSNames = append([]string(nil), cert.DNSNames...)
 	out.Emails = append([]string(nil), cert.EmailAddresses...)
@@ -229,36 +264,124 @@ func expirySuffix(notAfter time.Time) string {
 	}
 }
 
-func setUI(
-	status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA *widget.Label,
-	validity *canvas.Text,
-	dns, emails, ips, raw, preview *widget.Entry,
-	c CertData,
-) {
+// badge renders a small colored pill label, e.g. for "Valid"/"Expired".
+func badge(text string, bg color.Color) fyne.CanvasObject {
+	rect := canvas.NewRectangle(bg)
+	rect.CornerRadius = 8
+	lbl := widget.NewLabelWithStyle(text, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	return container.NewStack(rect, container.NewPadded(lbl))
+}
+
+// kvRow renders one "label ... value [copy]" row used throughout the
+// overview card. If value is empty the row is skipped by the caller.
+func kvRow(label, value string) fyne.CanvasObject {
+	l := widget.NewLabel(label)
+	l.Importance = widget.LowImportance
+	v := widget.NewLabel(value)
+	v.Wrapping = fyne.TextWrapWord
+	copyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+		_ = clipboard.WriteAll(value)
+	})
+	copyBtn.Importance = widget.LowImportance
+	return container.NewBorder(nil, nil, l, copyBtn, v)
+}
+
+// sectionHeader renders a bold section title like "General"/"Fingerprints".
+func sectionHeader(text string) fyne.CanvasObject {
+	return widget.NewLabelWithStyle(text, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+}
+
+// certStatus classifies a certificate's validity into a short label and
+// the color it should be shown with (valid/warning/error).
+func certStatus(c CertData) (string, color.Color) {
 	if c.ParseError != "" {
-		status.SetText("Clipboard enthält kein lesbares Zertifikat")
-		parseState.SetText("Parse: " + c.ParseError)
-	} else {
-		status.SetText("PEM-Zertifikat erkannt")
-		parseState.SetText("Parse: ok")
+		return "Fehler", theme.Color(theme.ColorNameError)
+	}
+	remaining := time.Until(c.NotAfterTime)
+	switch {
+	case remaining < 0:
+		return "Expired", theme.Color(theme.ColorNameError)
+	case remaining < expiryWarnDays*24*time.Hour:
+		return "Expiring soon", theme.Color(theme.ColorNameWarning)
+	default:
+		return "Valid", colorValid
+	}
+}
+
+// renderCertCard builds the full "Übersicht" card for one certificate:
+// a header with common name, status badge and a "Copy all" button, plus
+// General/Fingerprints/Extensions sections with per-field copy buttons.
+func renderCertCard(c CertData) fyne.CanvasObject {
+	if c.ParseError != "" {
+		return container.NewVBox(
+			widget.NewLabelWithStyle("Kein lesbares Zertifikat", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			widget.NewLabel(c.ParseError),
+		)
 	}
 
-	subject.SetText("Subject: " + c.Subject)
-	issuer.SetText("Issuer: " + c.Issuer)
-	serial.SetText("Serial: " + c.Serial)
-	validity.Text = "Validity: " + c.NotBefore + "  ->  " + c.NotAfter + expirySuffix(c.NotAfterTime)
-	validity.Color = expiryColor(c.NotAfterTime)
-	validity.Refresh()
-	fingerprint.SetText("SHA-256: " + c.Fingerprint)
-	pubkey.SetText("Public Key: " + c.PubKeyAlgo)
-	isCA.SetText("Is CA: " + c.IsCA)
+	statusText, statusColor := certStatus(c)
+	title := widget.NewLabelWithStyle(commonName(c.Subject), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	title.TextStyle.Bold = true
 
-	dns.SetText(strings.Join(c.DNSNames, "\n"))
-	emails.SetText(strings.Join(c.Emails, "\n"))
-	ips.SetText(strings.Join(c.IPs, "\n"))
+	copyAll := widget.NewButtonWithIcon("Copy all", theme.ContentCopyIcon(), func() {
+		summary := fmt.Sprintf(
+			"Subject: %s\nIssuer: %s\nSerial: %s\nVersion: %s\nValid from: %s\nValid until: %s\nSignature algorithm: %s\nPublic key: %s\nSHA-256: %s\nSHA-1: %s\nSAN: %s",
+			c.Subject, c.Issuer, c.Serial, c.Version, c.NotBefore, c.NotAfter, c.SigAlgo, c.PubKeyAlgo,
+			c.Fingerprint, c.FingerprintSHA1, sanSummary(c),
+		)
+		_ = clipboard.WriteAll(summary)
+	})
+	copyAll.Importance = widget.HighImportance
 
-	raw.SetText(c.Raw)
-	preview.SetText(c.Raw)
+	header := container.NewBorder(nil, nil,
+		container.NewHBox(title, badge(statusText, statusColor)),
+		copyAll,
+	)
+
+	general := container.NewVBox(
+		sectionHeader("General"),
+		kvRow("Subject", c.Subject),
+		kvRow("Issuer", c.Issuer),
+		kvRow("Serial", c.Serial),
+		kvRow("Version", c.Version),
+		kvRow("Valid from", c.NotBefore),
+		kvRow("Valid until", c.NotAfter+expirySuffix(c.NotAfterTime)),
+		kvRow("Signature algorithm", c.SigAlgo),
+		kvRow("Public key", c.PubKeyAlgo),
+		kvRow("Is CA", c.IsCA),
+	)
+
+	fingerprints := container.NewVBox(
+		sectionHeader("Fingerprints"),
+		kvRow("SHA-256", c.Fingerprint),
+		kvRow("SHA-1", c.FingerprintSHA1),
+	)
+
+	extensions := container.NewVBox(
+		sectionHeader("Extensions"),
+		kvRow("SAN", sanSummary(c)),
+	)
+
+	return container.NewVBox(header, widget.NewSeparator(), general, widget.NewSeparator(), fingerprints, widget.NewSeparator(), extensions)
+}
+
+// sanSummary joins all subject alternative names into one comma-separated
+// string, prefixed by type like a typical certificate viewer.
+func sanSummary(c CertData) string {
+	var parts []string
+	for _, d := range c.DNSNames {
+		parts = append(parts, "DNS:"+d)
+	}
+	for _, e := range c.Emails {
+		parts = append(parts, "email:"+e)
+	}
+	for _, ip := range c.IPs {
+		parts = append(parts, "IP Address:"+ip)
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // chainSummaryCard renders a compact summary of one certificate in a chain,
@@ -343,6 +466,7 @@ func main() {
 	}
 
 	a := app.NewWithID("com.example.certpeek")
+	a.Settings().SetTheme(certPeekTheme{})
 	icon := loadIcon()
 	a.SetIcon(icon)
 
@@ -357,20 +481,6 @@ func main() {
 	desktopLabel := widget.NewLabel("Desktop: " + detectDesktop())
 	parseState := widget.NewLabel("Parse: -")
 
-	subject := widget.NewLabel("Subject: -")
-	issuer := widget.NewLabel("Issuer: -")
-	serial := widget.NewLabel("Serial: -")
-	validity := canvas.NewText("Validity: -", theme.Color(theme.ColorNameForeground))
-	fingerprint := widget.NewLabel("SHA-256: -")
-	pubkey := widget.NewLabel("Public Key: -")
-	isCA := widget.NewLabel("Is CA: -")
-
-	dns := widget.NewMultiLineEntry()
-	dns.Disable()
-	emails := widget.NewMultiLineEntry()
-	emails.Disable()
-	ips := widget.NewMultiLineEntry()
-	ips.Disable()
 	raw := widget.NewMultiLineEntry()
 	raw.Disable()
 	preview := widget.NewMultiLineEntry()
@@ -381,14 +491,29 @@ func main() {
 	})
 	autoOpen.SetChecked(prefs.BoolWithFallback(autoOpenKey, false))
 
+	overviewBox := container.NewVBox()
 	chainBox := container.NewVBox()
 
 	updateFromChain := func(chain []CertData) {
-		setUI(status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA, validity, dns, emails, ips, raw, preview, chain[0])
+		c := chain[0]
+		if c.ParseError != "" {
+			status.SetText("Clipboard enthält kein lesbares Zertifikat")
+			parseState.SetText("Parse: " + c.ParseError)
+		} else {
+			status.SetText("PEM-Zertifikat erkannt")
+			parseState.SetText("Parse: ok")
+		}
+		raw.SetText(c.Raw)
+		preview.SetText(c.Raw)
+
+		overviewBox.RemoveAll()
+		overviewBox.Add(renderCertCard(c))
+		overviewBox.Refresh()
+
 		chainBox.RemoveAll()
 		if len(chain) > 1 {
-			for i, c := range chain {
-				chainBox.Add(chainSummaryCard(i+1, len(chain), c, chainLinkStatus(chain, i)))
+			for i, cc := range chain {
+				chainBox.Add(chainSummaryCard(i+1, len(chain), cc, chainLinkStatus(chain, i)))
 			}
 		} else {
 			chainBox.Add(widget.NewLabel("Nur ein Zertifikat gefunden (kein Bundle)."))
@@ -419,11 +544,6 @@ func main() {
 		a.Quit()
 	})
 
-	btnShow := widget.NewButton("Öffnen", func() {
-		w.Show()
-		w.RequestFocus()
-	})
-
 	settingsTab := container.NewVBox(
 		autoOpen,
 		widget.NewLabel("Die Einstellung wird automatisch gespeichert."),
@@ -433,27 +553,10 @@ func main() {
 		desktopLabel,
 		status,
 		parseState,
-		container.NewHBox(btnRefresh, btnDummyBundle, btnShow, btnQuit),
+		container.NewHBox(btnRefresh, btnDummyBundle, btnQuit),
 	)
 
-	overview := container.NewVScroll(container.NewVBox(
-		subject,
-		issuer,
-		serial,
-		validity,
-		fingerprint,
-		pubkey,
-		isCA,
-	))
-
-	sans := container.NewVScroll(container.NewVBox(
-		widget.NewLabel("DNS SANs"),
-		dns,
-		widget.NewLabel("Email SANs"),
-		emails,
-		widget.NewLabel("IP SANs"),
-		ips,
-	))
+	overview := container.NewVScroll(container.NewPadded(overviewBox))
 
 	rawTab := container.NewVScroll(container.NewVBox(
 		widget.NewLabel("Preview"),
@@ -467,7 +570,6 @@ func main() {
 
 	tabs := container.NewAppTabs(
 		container.NewTabItem("Übersicht", overview),
-		container.NewTabItem("SANs", sans),
 		container.NewTabItem("Kette", chainTab),
 		container.NewTabItem("Raw", rawTab),
 		container.NewTabItem("Einstellungen", settingsTab),
