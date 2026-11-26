@@ -77,10 +77,26 @@ func firstNLines(s string, n int) string {
 	return strings.Join(lines[:n], "\n") + "\n\n[...]"
 }
 
+// normalizePEM repairs two common copy-paste artifacts that break pem.Decode's
+// strict line-based parsing: literal "\n"/"\r\n" escape sequences (e.g. pasted
+// from a .env/JSON/YAML file instead of a raw .pem) and per-line indentation
+// (e.g. pasted from an indented config block).
+func normalizePEM(s string) string {
+	if !strings.Contains(s, "\n") && strings.Contains(s, "\\n") {
+		s = strings.ReplaceAll(s, "\\r\\n", "\n")
+		s = strings.ReplaceAll(s, "\\n", "\n")
+	}
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimSpace(l)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func parseCert(pemText string) CertData {
 	out := CertData{Raw: pemText}
 
-	block, _ := pem.Decode([]byte(pemText))
+	block, _ := pem.Decode([]byte(normalizePEM(pemText)))
 	if block == nil {
 		out.ParseError = "kein PEM-Block gefunden"
 		out.Raw = firstNLines(pemText, 12)
@@ -188,14 +204,27 @@ func setUI(
 func buildDummyCert() string {
 	return strings.TrimSpace(`
 -----BEGIN CERTIFICATE-----
-MIIDWTCCAkGgAwIBAgIUEXAMPLE1234567890ABCDEwDQYJKoZIhvcNAQELBQAw
-TzELMAkGA1UEBhMCREUxEjAQBgNVBAgMCkhlc3Nlbi1TdGFkMRIwEAYDVQQHDAlG
-cmFua2Z1cnQxFDASBgNVBAoMC1Rlc3QgT3JnIEx0ZDAeFw0yNjA4MDIwMDAwMDBa
-Fw0yNzA4MDIwMDAwMDBaME8xCzAJBgNVBAYTAkRFMRIwEAYDVQQIDAlIZXNzZW4t
-U3RhZDESMBAGA1UEBwwJRnJhbmtmdXJ0MRQwEgYDVQQKDAtUZXN0IE9yZyBMdGQw
-ggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC7EXAMPLEEXAMPLEEXAMPL
-EEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE
-EXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE
+MIID0TCCArmgAwIBAgIUGeYbTE7imbaPmlrvgF2X9PeVTkgwDQYJKoZIhvcNAQEL
+BQAwaDELMAkGA1UEBhMCREUxDzANBgNVBAgMBkhlc3NlbjESMBAGA1UEBwwJRnJh
+bmtmdXJ0MRUwEwYDVQQKDAxUZXN0IE9yZyBMdGQxHTAbBgNVBAMMFGR1bW15LmNl
+cnRwZWVrLmxvY2FsMB4XDTI2MTEyNjA4MjU0MloXDTI3MTEyNjA4MjU0MlowaDEL
+MAkGA1UEBhMCREUxDzANBgNVBAgMBkhlc3NlbjESMBAGA1UEBwwJRnJhbmtmdXJ0
+MRUwEwYDVQQKDAxUZXN0IE9yZyBMdGQxHTAbBgNVBAMMFGR1bW15LmNlcnRwZWVr
+LmxvY2FsMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsXVTx3bnjzaB
+8e3Vlj+6SEZBN2YDnfAO4aAZHFfiiL8S433eeFvOsCAGEpNVE8Nyo8Ii5VtWwYYt
+MA67FC5y1ywMjqGvRwJ1/N/8IzivSlsvuzgxyrbkuXDbPfse2tGNvT5v3MW2zSbt
+xt/AB8PN+g5r0Sh4b8rUsglyE5GBDZmdWkEclA3cuwfYkMqc3Nnd4cTfpkIu8I5y
+MI4dvfbnkSNs5M3Hrjv5Wt65Kt3dcGsdVIPToBzJJVMGEg2K1VgAkhmRzwkn6nN7
+Mzsed8B6FxY4VlH6KYYk7Km7CqHg3XJNHOdGRuLiDUQxKg6/P9cJeNknfEnVrcoi
+zuJ+mgBRJQIDAQABo3MwcTAdBgNVHQ4EFgQU/JQif5j7LvFnRvr51OwRg8LGk5gw
+DwYDVR0TAQH/BAUwAwEB/zA/BgNVHREEODA2ghRkdW1teS5jZXJ0cGVlay5sb2Nh
+bIIYd3d3LmR1bW15LmNlcnRwZWVrLmxvY2FshwR/AAABMA0GCSqGSIb3DQEBCwUA
+A4IBAQAwt3xiJS6hn1znV56/cwfBbJUAQDBbEMJSlj7yh1awprf7aHsgy7/k9IPv
+yzuLk8sQIksi6JmQe/aexUr9iBVWJb+r2JMa76/D1v/m6nmWST1DlvR1IdsENEre
+T9mWkOxYHqI/kUjgqwaK4h4NFmYWBi/gU5pBwlv7sFbb7qOb39yv7Z6v8M9dawdH
+20SR0QBqsLGxWOadfNZkFQTgia1CvjwXToENBSWmIP6ptZMPxKIpXO4qOFhP1Fp4
+Xfx3jb4co1AOKUVxtN0gbBz7IihKnmAYxBGuBEoi8ufLkUEqAYyQWBSmWXQPD+S7
+1r7pvw6OEKTpzErt6TJNYsOOp/JY
 -----END CERTIFICATE-----
 `)
 }
@@ -346,9 +375,10 @@ func main() {
 			if err == nil && text != last {
 				last = text
 				if strings.Contains(text, "-----BEGIN CERTIFICATE-----") {
-					c := parseCert(text)
-					fyne.Do(func() {
-						setUI(status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA, validity, dns, emails, ips, raw, preview, c)
+				c := parseCert(text)
+				fyne.Do(func() {
+					setUI(status, parseState, subject, issuer, serial, fingerprint, pubkey, isCA, validity, dns, emails, ips, raw, preview, c)
+					if c.ParseError == "" {
 						a.SendNotification(&fyne.Notification{
 							Title:   "Zertifikat gefunden",
 							Content: "Ein passendes Zertifikat wurde in der Zwischenablage erkannt.",
@@ -357,7 +387,8 @@ func main() {
 							w.Show()
 							w.RequestFocus()
 						}
-					})
+					}
+				})
 				}
 			}
 			time.Sleep(1 * time.Second)
