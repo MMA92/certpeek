@@ -313,9 +313,13 @@ func kvSection(title string, rows [][2]string) fyne.CanvasObject {
 	panel.CornerRadius = 8
 	// Wrapped in an HBox so the panel hugs the form's natural width instead
 	// of stretching edge-to-edge like its VBox parent would otherwise do.
+	panelRow := container.NewHBox(container.NewStack(panel, container.NewPadded(form)))
+	if title == "" {
+		return panelRow
+	}
 	return container.NewVBox(
 		widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		container.NewHBox(container.NewStack(panel, container.NewPadded(form))),
+		panelRow,
 	)
 }
 
@@ -419,30 +423,24 @@ func chainSummaryCard(pos, total int, c CertData, linkStatus string) fyne.Canvas
 	} else if pos == total {
 		role = "Root"
 	}
+	heading := widget.NewLabelWithStyle(fmt.Sprintf("#%d/%d", pos, total), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	header := container.NewHBox(heading, badge(role, activePalette.Loud))
+
 	if c.ParseError != "" {
-		return container.NewVBox(
-			widget.NewLabelWithStyle(fmt.Sprintf("#%d/%d (%s) - Fehler", pos, total, role), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-			widget.NewLabel(c.ParseError),
-			widget.NewSeparator(),
-		)
+		return container.NewVBox(header, widget.NewLabel(c.ParseError), widget.NewSeparator())
 	}
-	validity := canvas.NewText("Validity: "+c.NotBefore+"  ->  "+c.NotAfter+expirySuffix(c.NotAfterTime), expiryColor(c.NotAfterTime))
-	box := container.NewVBox(
-		widget.NewLabelWithStyle(fmt.Sprintf("#%d/%d (%s)", pos, total, role), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("Subject: "+c.Subject),
-		widget.NewLabel("Issuer: "+c.Issuer),
-		validity,
-		widget.NewLabel("SHA-256: "+c.Fingerprint),
-	)
+
+	rows := [][2]string{
+		{"Subject", c.Subject},
+		{"Issuer", c.Issuer},
+		{"Valid until", c.NotAfter + expirySuffix(c.NotAfterTime)},
+		{"SHA-256", c.Fingerprint},
+	}
 	if linkStatus != "" {
-		linkColor := theme.Color(theme.ColorNameForeground)
-		if strings.HasPrefix(linkStatus, "✗") || strings.HasPrefix(linkStatus, "⚠") {
-			linkColor = theme.Color(theme.ColorNameError)
-		} else if strings.HasPrefix(linkStatus, "✓") {
-			linkColor = theme.Color(theme.ColorNameSuccess)
-		}
-		box.Add(canvas.NewText(linkStatus, linkColor))
+		rows = append(rows, [2]string{"Kettenprüfung", linkStatus})
 	}
+
+	box := container.NewVBox(header, kvSection("", rows))
 	if pos < total {
 		box.Add(widget.NewLabel("  ↓"))
 	}
