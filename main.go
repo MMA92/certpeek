@@ -21,6 +21,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -272,23 +273,50 @@ func badge(text string, bg color.Color) fyne.CanvasObject {
 	return container.NewStack(rect, container.NewPadded(lbl))
 }
 
-// kvRow renders one "label ... value [copy]" row used throughout the
-// overview card. If value is empty the row is skipped by the caller.
-func kvRow(label, value string) fyne.CanvasObject {
+// kvFormRow returns the (label, content) pair for one row of a form-layout
+// section: a dimmed label on the left and the value plus an orange copy
+// icon on the right, value left-aligned and stretched to fill the column.
+func kvFormRow(label, value string) (fyne.CanvasObject, fyne.CanvasObject) {
 	l := widget.NewLabel(label)
 	l.Importance = widget.LowImportance
+	labelChip := canvas.NewRectangle(lighten(activePalette.Main, 0x1E))
+	labelChip.CornerRadius = 6
+	labelCell := container.NewStack(labelChip, container.NewPadded(l))
+
 	v := widget.NewLabel(value)
 	v.Wrapping = fyne.TextWrapWord
 	copyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
 		_ = clipboard.WriteAll(value)
 	})
-	copyBtn.Importance = widget.LowImportance
-	return container.NewBorder(nil, nil, l, copyBtn, v)
+	copyBtn.Importance = widget.HighImportance // tints the icon with the Loud accent
+
+	// Reserve a minimum width for short values (e.g. "V3", "false") so the
+	// copy icon doesn't sit right next to the text; long values (Subject,
+	// SAN, ...) simply grow past it and push the icon further right still.
+	spacer := canvas.NewRectangle(color.Transparent)
+	spacer.SetMinSize(fyne.NewSize(380, 1))
+
+	return labelCell, container.NewBorder(nil, nil, nil, copyBtn, container.NewStack(spacer, v))
 }
 
-// sectionHeader renders a bold section title like "General"/"Fingerprints".
-func sectionHeader(text string) fyne.CanvasObject {
-	return widget.NewLabelWithStyle(text, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+// kvSection renders a bold section title followed by a compact two-column
+// form of label/value rows (each with its own copy button), set against a
+// lighter "category panel" background so the grouping is visible at a glance.
+func kvSection(title string, rows [][2]string) fyne.CanvasObject {
+	form := container.New(layout.NewFormLayout())
+	for _, r := range rows {
+		l, v := kvFormRow(r[0], r[1])
+		form.Add(l)
+		form.Add(v)
+	}
+	panel := canvas.NewRectangle(lighten(activePalette.Main, 0x12))
+	panel.CornerRadius = 8
+	// Wrapped in an HBox so the panel hugs the form's natural width instead
+	// of stretching edge-to-edge like its VBox parent would otherwise do.
+	return container.NewVBox(
+		widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewHBox(container.NewStack(panel, container.NewPadded(form))),
+	)
 }
 
 // certStatus classifies a certificate's validity into a short label and
@@ -338,29 +366,26 @@ func renderCertCard(c CertData) fyne.CanvasObject {
 		copyAll,
 	)
 
-	general := container.NewVBox(
-		sectionHeader("General"),
-		kvRow("Subject", c.Subject),
-		kvRow("Issuer", c.Issuer),
-		kvRow("Serial", c.Serial),
-		kvRow("Version", c.Version),
-		kvRow("Valid from", c.NotBefore),
-		kvRow("Valid until", c.NotAfter+expirySuffix(c.NotAfterTime)),
-		kvRow("Signature algorithm", c.SigAlgo),
-		kvRow("Public key", c.PubKeyAlgo),
-		kvRow("Is CA", c.IsCA),
-	)
+	general := kvSection("General", [][2]string{
+		{"Subject", c.Subject},
+		{"Issuer", c.Issuer},
+		{"Serial", c.Serial},
+		{"Version", c.Version},
+		{"Valid from", c.NotBefore},
+		{"Valid until", c.NotAfter + expirySuffix(c.NotAfterTime)},
+		{"Signature algorithm", c.SigAlgo},
+		{"Public key", c.PubKeyAlgo},
+		{"Is CA", c.IsCA},
+	})
 
-	fingerprints := container.NewVBox(
-		sectionHeader("Fingerprints"),
-		kvRow("SHA-256", c.Fingerprint),
-		kvRow("SHA-1", c.FingerprintSHA1),
-	)
+	fingerprints := kvSection("Fingerprints", [][2]string{
+		{"SHA-256", c.Fingerprint},
+		{"SHA-1", c.FingerprintSHA1},
+	})
 
-	extensions := container.NewVBox(
-		sectionHeader("Extensions"),
-		kvRow("SAN", sanSummary(c)),
-	)
+	extensions := kvSection("Extensions", [][2]string{
+		{"SAN", sanSummary(c)},
+	})
 
 	return container.NewVBox(header, widget.NewSeparator(), general, widget.NewSeparator(), fingerprints, widget.NewSeparator(), extensions)
 }

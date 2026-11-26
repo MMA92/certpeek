@@ -54,6 +54,21 @@ func paletteByName(name string) palette {
 	return paletteCharcoal
 }
 
+// lighten returns c with each channel moved delta steps towards white,
+// used to derive a subtle "category panel" background a bit lighter than
+// the active Main background, independent of what hue Secondary happens
+// to be in the current palette.
+func lighten(c color.NRGBA, delta int) color.NRGBA {
+	bump := func(v uint8) uint8 {
+		n := int(v) + delta
+		if n > 255 {
+			n = 255
+		}
+		return uint8(n)
+	}
+	return color.NRGBA{R: bump(c.R), G: bump(c.G), B: bump(c.B), A: c.A}
+}
+
 // certPeekTheme is a dark theme built from the four colors above, layered
 // on top of Fyne's built-in dark theme for anything not explicitly styled.
 type certPeekTheme struct{}
@@ -82,6 +97,13 @@ func (certPeekTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) 
 		// orange-on-orange.
 		f := activePalette.Foreground
 		return color.NRGBA{R: f.R, G: f.G, B: f.B, A: 0x30}
+	case theme.ColorNameDisabled:
+		// Used for LowImportance labels (e.g. field names in the overview
+		// card). Fyne's default disabled gray has too little contrast
+		// against our custom backgrounds, so dim the palette's own
+		// Foreground color instead of switching to an unrelated gray.
+		f := activePalette.Foreground
+		return color.NRGBA{R: f.R, G: f.G, B: f.B, A: 0xB0}
 	case theme.ColorNameSuccess:
 		return activePalette.Valid
 	default:
