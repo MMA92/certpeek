@@ -5,8 +5,10 @@ import (
 	"crypto/x509"
 	_ "embed"
 	"encoding/pem"
+	"flag"
 	"fmt"
 	"image/color"
+	"log/syslog"
 	"os"
 	"strings"
 	"time"
@@ -229,7 +231,39 @@ Xfx3jb4co1AOKUVxtN0gbBz7IihKnmAYxBGuBEoi8ufLkUEqAYyQWBSmWXQPD+S7
 `)
 }
 
+func runService(logger *syslog.Writer) {
+	logger.Info("CertPeek service started")
+	last := ""
+	for {
+		text, err := clipboard.ReadAll()
+		if err == nil && text != last && strings.Contains(text, "-----BEGIN CERTIFICATE-----") {
+			last = text
+			c := parseCert(text)
+			if c.ParseError == "" {
+				logger.Info(fmt.Sprintf("Cert found: Subject=%s, NotAfter=%s", c.Subject, c.NotAfter))
+			} else {
+				logger.Info(fmt.Sprintf("Cert parse error: %s", c.ParseError))
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
 func main() {
+	serviceMode := flag.Bool("service", false, "run as background service (syslog output)")
+	flag.Parse()
+
+	if *serviceMode {
+		logger, err := syslog.New(syslog.LOG_INFO, "certpeek")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syslog error: %v\n", err)
+			os.Exit(1)
+		}
+		defer logger.Close()
+		runService(logger)
+		return
+	}
+
 	a := app.NewWithID("com.example.certpeek")
 	icon := loadIcon()
 	a.SetIcon(icon)

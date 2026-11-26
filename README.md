@@ -21,11 +21,33 @@ CertPeek is a small Go desktop app that watches your clipboard for PEM-encoded X
 
 ## Usage
 
+### Desktop App (GUI)
+
 ```bash
 go run .
 ```
 
 Copy a PEM certificate to the clipboard and CertPeek will detect it automatically.
+
+### Background Service
+
+Build and install to `~/.local/bin/`:
+
+```bash
+curl -L https://github.com/YOUR_REPO/certpeek/releases/download/latest/certpeek -o ~/.local/bin/certpeek && chmod +x ~/.local/bin/certpeek
+```
+
+Install systemd service:
+
+```bash
+mkdir -p ~/.config/systemd/user
+curl -L https://github.com/YOUR_REPO/certpeek/releases/download/latest/certpeek.service -o ~/.config/systemd/user/certpeek.service
+systemctl --user daemon-reload
+systemctl --user enable --now certpeek
+journalctl --user -u certpeek -f
+```
+
+The service watches your clipboard and logs certificate details to `journalctl`.
 
 ## License
 

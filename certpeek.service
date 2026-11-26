@@ -1,0 +1,16 @@
+[Unit]
+Description=CertPeek Certificate Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/certpeek -service
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=certpeek
+
+[Install]
+WantedBy=default.target
