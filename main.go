@@ -59,6 +59,11 @@ type CertData struct {
 	Emails          []string
 	IPs             []string
 	Raw             string
+	// ShortID is a quick visual identifier built from the PEM body's
+	// base64 text: the first 8 and last 4 characters, e.g.
+	// "MIID0TCC...p/JY". Useful for eyeballing
+	// which certificate is which in a bundle without comparing fingerprints.
+	ShortID string
 
 	// cert holds the parsed certificate for chain-link verification
 	// (CheckSignatureFrom). Not used for display.
@@ -75,6 +80,22 @@ func commonName(dn string) string {
 		}
 	}
 	return dn
+}
+
+// shortID re-encodes der as PEM to get its base64 body text, then returns
+// the first 8 and last 4 characters joined by "...", e.g.
+// "MIID0TCC...p/JY".
+func shortID(der []byte) string {
+	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	lines := strings.Split(strings.TrimSpace(string(block)), "\n")
+	if len(lines) < 3 {
+		return ""
+	}
+	body := strings.Join(lines[1:len(lines)-1], "")
+	if len(body) <= 16 {
+		return body
+	}
+	return body[:8] + "..." + body[len(body)-4:]
 }
 
 // pubKeyDescription returns a human-readable public key summary like
@@ -202,6 +223,7 @@ func certDataFromDER(der []byte, rawSource string) CertData {
 	out.Emails = append([]string(nil), cert.EmailAddresses...)
 	out.IPs = ips
 	out.cert = cert
+	out.ShortID = shortID(der)
 
 	return out
 }
@@ -274,6 +296,24 @@ func badge(text string, bg color.Color) fyne.CanvasObject {
 }
 
 // kvFormRow returns the (label, content) pair for one row of a form-layout
+// metaRow renders a small italic, accent-colored row for tool-generated
+// helper info (like the PEM snippet) that is NOT an actual certificate
+// field - visually distinct from the gray-chip rows in kvSection so it's
+// obvious this value doesn't come from the certificate itself.
+func metaRow(label, value string) fyne.CanvasObject {
+	accent := activePalette.Loud
+	muted := color.NRGBA{R: accent.R, G: accent.G, B: accent.B, A: 0xB0}
+	l := canvas.NewText(label+":", muted)
+	l.TextStyle = fyne.TextStyle{Italic: true}
+	v := canvas.NewText(value, muted)
+	v.TextStyle = fyne.TextStyle{Italic: true}
+	copyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+		_ = clipboard.WriteAll(value)
+	})
+	copyBtn.Importance = widget.LowImportance
+	return container.NewHBox(l, v, copyBtn)
+}
+
 // section: a dimmed label on the left and the value plus an orange copy
 // icon on the right, value left-aligned and stretched to fill the column.
 func kvFormRow(label, value string) (fyne.CanvasObject, fyne.CanvasObject) {
@@ -391,7 +431,7 @@ func renderCertCard(c CertData) fyne.CanvasObject {
 		{"SAN", sanSummary(c)},
 	})
 
-	return container.NewVBox(header, widget.NewSeparator(), general, widget.NewSeparator(), fingerprints, widget.NewSeparator(), extensions)
+	return container.NewVBox(header, metaRow("Base64 snippet", c.ShortID), widget.NewSeparator(), general, widget.NewSeparator(), fingerprints, widget.NewSeparator(), extensions)
 }
 
 // sanSummary joins all subject alternative names into one comma-separated
@@ -440,7 +480,7 @@ func chainSummaryCard(pos, total int, c CertData, linkStatus string) fyne.Canvas
 		rows = append(rows, [2]string{"Kettenprüfung", linkStatus})
 	}
 
-	box := container.NewVBox(header, kvSection("", rows))
+	box := container.NewVBox(header, metaRow("Base64 snippet", c.ShortID), kvSection("", rows))
 	if pos < total {
 		box.Add(widget.NewLabel("  ↓"))
 	}
