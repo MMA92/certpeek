@@ -7,21 +7,52 @@ import (
 	"fyne.io/fyne/v2/theme"
 )
 
-// The app's palette is deliberately reduced to four colors:
-//
-//   - colorMain:      main window/app background (darkest)
-//   - colorSecondary: panels, cards, rows, borders (one step lighter)
-//   - colorLoud:      accent color for buttons, links, active state
-//   - colorValid:     success/valid state (certificate not expired)
-//
-// Everything else (text, error, warning) reuses Fyne's defaults so the
-// theme stays readable without hand-tuning every color name.
+// palette holds the app's four-color design: main background, a secondary
+// color for panels/rows/borders, a loud accent for buttons/links/active
+// state, and a valid/success color for non-expired certificates.
+type palette struct {
+	Main, Secondary, Loud, Valid color.NRGBA
+	// Foreground is the main text color, chosen for contrast against Main.
+	// Fyne's default foreground follows the OS light/dark variant, not our
+	// custom Main color, so each palette must set its own.
+	Foreground color.NRGBA
+}
+
 var (
-	colorMain      = color.NRGBA{R: 0x16, G: 0x18, B: 0x1f, A: 0xff}
-	colorSecondary = color.NRGBA{R: 0x22, G: 0x25, B: 0x2e, A: 0xff}
-	colorLoud      = color.NRGBA{R: 0xff, G: 0x7a, B: 0x1a, A: 0xff}
-	colorValid     = color.NRGBA{R: 0x22, G: 0xc5, B: 0x5e, A: 0xff}
+	// paletteCream: light cream background, dark navy panels, orange accent.
+	paletteCream = palette{
+		Main:       color.NRGBA{R: 0xEC, G: 0xDF, B: 0xC6, A: 0xff},
+		Secondary:  color.NRGBA{R: 0x1A, G: 0x22, B: 0x38, A: 0xff},
+		Loud:       color.NRGBA{R: 0xFF, G: 0x62, B: 0x16, A: 0xff},
+		Valid:      color.NRGBA{R: 0x2F, G: 0x6F, B: 0x4E, A: 0xff}, // forest green
+		Foreground: color.NRGBA{R: 0x1A, G: 0x1A, B: 0x1A, A: 0xff}, // near-black
+	}
+
+	// paletteCharcoal: dark charcoal background, warm beige panels, orange accent.
+	paletteCharcoal = palette{
+		Main:       color.NRGBA{R: 0x2B, G: 0x2D, B: 0x31, A: 0xff},
+		Secondary:  color.NRGBA{R: 0xD2, G: 0xC6, B: 0xB4, A: 0xff},
+		Loud:       color.NRGBA{R: 0xFF, G: 0x62, B: 0x16, A: 0xff},
+		Valid:      color.NRGBA{R: 0x7A, G: 0x9D, B: 0x54, A: 0xff}, // olive green
+		Foreground: color.NRGBA{R: 0xF2, G: 0xF0, B: 0xEC, A: 0xff}, // near-white
+	}
+
+	// activePalette is the palette currently applied to the app.
+	activePalette = paletteCharcoal
+
+	// paletteNames maps the names shown in the UI to their palette, in
+	// display order.
+	paletteNames = []string{"Charcoal", "Cream"}
 )
+
+// paletteByName resolves a UI palette name to its palette, defaulting to
+// paletteCharcoal for unknown/empty names.
+func paletteByName(name string) palette {
+	if name == "Cream" {
+		return paletteCream
+	}
+	return paletteCharcoal
+}
 
 // certPeekTheme is a dark theme built from the four colors above, layered
 // on top of Fyne's built-in dark theme for anything not explicitly styled.
@@ -30,16 +61,18 @@ type certPeekTheme struct{}
 func (certPeekTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
 	switch name {
 	case theme.ColorNameBackground:
-		return colorMain
+		return activePalette.Main
+	case theme.ColorNameForeground:
+		return activePalette.Foreground
 	case theme.ColorNameMenuBackground, theme.ColorNameOverlayBackground,
 		theme.ColorNameInputBackground, theme.ColorNameHeaderBackground,
 		theme.ColorNameSeparator:
-		return colorSecondary
+		return activePalette.Secondary
 	case theme.ColorNamePrimary, theme.ColorNameButton, theme.ColorNameHover,
 		theme.ColorNameFocus, theme.ColorNameSelection:
-		return colorLoud
+		return activePalette.Loud
 	case theme.ColorNameSuccess:
-		return colorValid
+		return activePalette.Valid
 	default:
 		return theme.DefaultTheme().Color(name, variant)
 	}

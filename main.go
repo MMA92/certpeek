@@ -304,7 +304,7 @@ func certStatus(c CertData) (string, color.Color) {
 	case remaining < expiryWarnDays*24*time.Hour:
 		return "Expiring soon", theme.Color(theme.ColorNameWarning)
 	default:
-		return "Valid", colorValid
+		return "Valid", activePalette.Valid
 	}
 }
 
@@ -472,6 +472,8 @@ func main() {
 
 	prefs := a.Preferences()
 	autoOpenKey := "auto_open"
+	themeKey := "theme_palette"
+	activePalette = paletteByName(prefs.StringWithFallback(themeKey, "Charcoal"))
 
 	w := a.NewWindow("CertPeek")
 	w.SetIcon(icon)
@@ -493,8 +495,11 @@ func main() {
 
 	overviewBox := container.NewVBox()
 	chainBox := container.NewVBox()
+	var lastChain []CertData
 
-	updateFromChain := func(chain []CertData) {
+	var updateFromChain func(chain []CertData)
+	updateFromChain = func(chain []CertData) {
+		lastChain = chain
 		c := chain[0]
 		if c.ParseError != "" {
 			status.SetText("Clipboard enthält kein lesbares Zertifikat")
@@ -544,9 +549,22 @@ func main() {
 		a.Quit()
 	})
 
+	themeSelect := widget.NewSelect(paletteNames, func(name string) {
+		activePalette = paletteByName(name)
+		prefs.SetString(themeKey, name)
+		a.Settings().SetTheme(certPeekTheme{})
+		if lastChain != nil {
+			updateFromChain(lastChain)
+		}
+	})
+	themeSelect.SetSelected(prefs.StringWithFallback(themeKey, "Charcoal"))
+
 	settingsTab := container.NewVBox(
 		autoOpen,
 		widget.NewLabel("Die Einstellung wird automatisch gespeichert."),
+		widget.NewSeparator(),
+		widget.NewLabel("Farbschema"),
+		themeSelect,
 	)
 
 	top := container.NewVBox(
