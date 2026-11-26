@@ -68,9 +68,20 @@ func (certPeekTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) 
 		theme.ColorNameInputBackground, theme.ColorNameHeaderBackground,
 		theme.ColorNameSeparator:
 		return activePalette.Secondary
-	case theme.ColorNamePrimary, theme.ColorNameButton, theme.ColorNameHover,
-		theme.ColorNameFocus, theme.ColorNameSelection:
+	case theme.ColorNamePrimary, theme.ColorNameButton, theme.ColorNameSelection:
 		return activePalette.Loud
+	case theme.ColorNameForegroundOnPrimary:
+		// Text/icons drawn on top of the orange Loud color (e.g. the
+		// "Copy all" button) need to stay black regardless of the palette.
+		return color.NRGBA{R: 0x1A, G: 0x1A, B: 0x1A, A: 0xff}
+	case theme.ColorNameHover, theme.ColorNameFocus:
+		// A selected tab's label is always drawn in Primary (orange) by
+		// Fyne, with no per-state override. Using Loud here too would make
+		// an orange hovered+selected tab unreadable, so hover gets a
+		// translucent tint instead - subtle on any background and never
+		// orange-on-orange.
+		f := activePalette.Foreground
+		return color.NRGBA{R: f.R, G: f.G, B: f.B, A: 0x30}
 	case theme.ColorNameSuccess:
 		return activePalette.Valid
 	default:
