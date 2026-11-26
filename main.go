@@ -13,7 +13,9 @@ import (
 	"image/color"
 	"log/syslog"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -513,7 +515,31 @@ func runService(logger *syslog.Writer) {
 	})
 }
 
+// acquireSingleInstanceLock takes an exclusive, non-blocking flock on a
+// well-known lock file so only one CertPeek process (GUI or service) runs
+// at a time. The returned file must be kept open for the process lifetime;
+// the OS releases the lock automatically on exit.
+func acquireSingleInstanceLock() (*os.File, error) {
+	path := filepath.Join(os.TempDir(), "certpeek.lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("another CertPeek instance is already running")
+	}
+	return f, nil
+}
+
 func main() {
+	lock, err := acquireSingleInstanceLock()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer lock.Close()
+
 	serviceMode := flag.Bool("service", false, "run as background service (syslog output)")
 	flag.Parse()
 
@@ -612,22 +638,35 @@ func main() {
 		a.Quit()
 	})
 
-	themeSelect := widget.NewSelect(paletteNames, func(name string) {
+	themeRow := container.NewHBox()
+	var rebuildThemeRow func()
+	selectPalette := func(name string) {
 		activePalette = paletteByName(name)
 		prefs.SetString(themeKey, name)
 		a.Settings().SetTheme(certPeekTheme{})
+		rebuildThemeRow()
 		if lastChain != nil {
 			updateFromChain(lastChain)
 		}
-	})
-	themeSelect.SetSelected(prefs.StringWithFallback(themeKey, "Charcoal"))
+	}
+	rebuildThemeRow = func() {
+		current := prefs.StringWithFallback(themeKey, "Charcoal")
+		themeRow.RemoveAll()
+		for _, name := range paletteNames {
+			name := name // capture for closure
+			p := paletteByName(name)
+			themeRow.Add(newPaletteSwatch(p, name, name == current, func() { selectPalette(name) }))
+		}
+		themeRow.Refresh()
+	}
+	rebuildThemeRow()
 
 	settingsTab := container.NewVBox(
 		autoOpen,
 		widget.NewLabel("Die Einstellung wird automatisch gespeichert."),
 		widget.NewSeparator(),
 		widget.NewLabel("Farbschema"),
-		themeSelect,
+		themeRow,
 	)
 
 	top := container.NewVBox(
