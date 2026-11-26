@@ -265,7 +265,9 @@ func expiryColor(notAfter time.Time) color.Color {
 	case remaining < 0:
 		return theme.Color(theme.ColorNameError)
 	case remaining < expiryWarnDays*24*time.Hour:
-		return theme.Color(theme.ColorNameWarning)
+		// Expiring soon is shown in the same red as expired - it needs to
+		// be impossible to miss, not just "a bit yellow".
+		return theme.Color(theme.ColorNameError)
 	default:
 		return theme.Color(theme.ColorNameForeground)
 	}
@@ -376,7 +378,9 @@ func certStatus(c CertData) (string, color.Color) {
 	case remaining < 0:
 		return "Expired", theme.Color(theme.ColorNameError)
 	case remaining < expiryWarnDays*24*time.Hour:
-		return "Expiring soon", theme.Color(theme.ColorNameWarning)
+		// Red, same as Expired - a cert expiring in under 30 days needs to
+		// stand out immediately, not blend in as a mild yellow warning.
+		return "Expiring soon", theme.Color(theme.ColorNameError)
 	default:
 		return "Valid", activePalette.Valid
 	}
